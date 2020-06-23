@@ -11,18 +11,20 @@ MAX_ROOMS = 30
 FOV_ALGO = 0
 FOV_LIGHT_WALLS = True
 TORCH_RADIUS = 10
-
+MAX_ROOM_ENEMIES = 3
 
 class Object:
 
-    def __init__(self, x, y, char, color):
+    def __init__(self, x, y, char, name, color, blocks=False):
         self.x = x
         self.y = y
         self.char = char
+        self.name = name
         self.color = color
+        self.blocks = blocks
 
     def move(self, dx, dy):
-        if not map[self.x + dx][self.y + dy].blocked:
+        if not isBlocked(self.x + dx, self.y + dy):
             self.x += dx
             self.y += dy
 
@@ -58,6 +60,12 @@ class Rect:
     def intersect(self, other):
         return self.x1 <= other.x2 and self.x2 >= other.x1 and self.y1 <= other.y1 and self.y2 >= other.y2
 
+def isBlocked(x, y):
+    if map[x][y].blocked:
+        return True
+    for object in objects:
+        if object.blocks and object.x ==x and object.y == y:
+            return True
 
 def createRoom(room):
     global map
@@ -80,6 +88,22 @@ def createVTunnel(y1, y2, x):
         map[x][y].blocked = False
         map[x][y].blockSight = False
 
+def playerMoveOrAttack(dx, dy):
+    global fovRecompute
+    x = player.x + dx
+    y = player.y + dy
+
+    target = None
+    for object in objects:
+        if object.x == x and object.y == y:
+            target = object
+            break
+    if target is not None:
+        print 'The ' + target.name + 'laughs at your petty effort to attack him'
+    else:
+         player.move(dx, dy)
+         fovRecompute = True
+
 
 def handleKeys():
     global fovRecompute
@@ -88,21 +112,21 @@ def handleKeys():
     if key.vk == tcod.KEY_ENTER and key.lalt:
         tcod.console_set_fullscreen(not tcod.console_is_fullscreen())
     elif key.vk == tcod.KEY_ESCAPE:
-        return True
+        return 'exit'
 
     #movement
-    if tcod.console_is_key_pressed(tcod.KEY_UP):
-        player.move(0, -1)
-        fovRecompute = True
-    elif tcod.console_is_key_pressed(tcod.KEY_DOWN):
-        player.move(0, 1)
-        fovRecompute = True
-    elif tcod.console_is_key_pressed(tcod.KEY_LEFT):
-        player.move(-1, 0)
-        fovRecompute = True
-    elif tcod.console_is_key_pressed(tcod.KEY_RIGHT):
-        player.move(1, 0)
-        fovRecompute = True
+    if gameState == 'playing':
+        if tcod.console_is_key_pressed(tcod.KEY_UP):
+            playerMoveOrAttack(0, -1)
+        elif tcod.console_is_key_pressed(tcod.KEY_DOWN):
+            playerMoveOrAttack(0, 1)
+        elif tcod.console_is_key_pressed(tcod.KEY_LEFT):
+            playerMoveOrAttack(-1, 0)
+        elif tcod.console_is_key_pressed(tcod.KEY_RIGHT):
+            playerMoveOrAttack(1, 0)
+        else:
+            return 'didnt-take-turn'
+
 
 def makeMap():
     global map, player
@@ -138,6 +162,7 @@ def makeMap():
                 else:
                     createVTunnel(prevY, newY, prevX)
                     createHTunnel(prevX, newX, newY)
+            place_objects(newRoom)
             rooms.append(newRoom)
             numRooms += 1
 
@@ -169,20 +194,37 @@ def renderAll():
     tcod.console_blit(con, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0)
 
 
+def place_objects(room):
+    numEnemies = tcod.random_get_int(0, 0, MAX_ROOM_ENEMIES)
+    for i in range(numEnemies):
+        x = tcod.random_get_int(0, room.x1, room.x2)
+        y = tcod.random_get_int(0, room.y1, room.y2)
+
+        if not isBlocked(x, y):
+            if tcod.random_get_int(0, 0, 100,) < 80:
+                #ORC
+                enemy = Object(x, y, 'O', 'Orc', tcod.desaturated_green, blocks=True)
+            else:
+                #TROLL
+                enemy = Object(x, y, 'T', 'Troll', tcod.darker_green, blocks=True)
+            objects.append(enemy)
+
 tcod.console_set_custom_font('arial10x10.png', tcod.FONT_TYPE_GREYSCALE | tcod.FONT_LAYOUT_TCOD)
 tcod.console_init_root(SCREEN_WIDTH, SCREEN_HEIGHT, 'python/RogueGame', False)
 con = tcod.console_new(SCREEN_WIDTH, SCREEN_HEIGHT)
 tcod.sys_set_fps(LIMITFPS)
 #characters
-player = Object(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, '@', tcod.turquoise)
-npc = Object(SCREEN_WIDTH/2 - 5, SCREEN_HEIGHT/2 - 5, '*', tcod.red)
-objects = [player, npc]
+player = Object(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, '@', 'player', tcod.turquoise, blocks=True)
+objects = [player]
 
 #map colors
 colorLightWall = tcod.Color(130,110,50)
 colorLightGround = tcod.Color(200,1080,50)
 colorDarkWall = tcod.Color(0, 0, 100)
 colorDarkGround = tcod.Color(50, 50, 150)
+
+gameState = 'playing'
+playerAction = None
 
 makeMap()
 
@@ -201,6 +243,10 @@ while not tcod.console_is_window_closed():
     for object in objects:
         object.clear()
 
-    exit = handleKeys()
-    if exit:
+    playerAction = handleKeys()
+    if playerAction == 'exit':
         break
+    if gameState == 'playing' and playerAction != 'didnt-take-turn':
+        for object in objects:
+            if object != 'player':
+                print 'The ' + object.name + ' growls!'
