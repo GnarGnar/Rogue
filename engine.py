@@ -8,7 +8,9 @@ LIMITFPS = 20
 ROOM_MAX_SIZE = 10
 ROOM_MIN_SIZE = 6
 MAX_ROOMS = 30
-
+FOV_ALGO = 0
+FOV_LIGHT_WALLS = True
+TORCH_RADIUS = 10
 
 
 class Object:
@@ -35,7 +37,7 @@ class Object:
 class Tile:
     def __init__(self, blocked, blockSight = None):
         self.blocked = blocked
-
+        self.explored = False
         if blockSight is None:
             blockSight = blocked
         self.blockSight = blockSight
@@ -78,8 +80,9 @@ def createVTunnel(y1, y2, x):
         map[x][y].blocked = False
         map[x][y].blockSight = False
 
+
 def handleKeys():
-    global player
+    global fovRecompute
     #options
     key = tcod.console_check_for_keypress(True)
     if key.vk == tcod.KEY_ENTER and key.lalt:
@@ -90,13 +93,16 @@ def handleKeys():
     #movement
     if tcod.console_is_key_pressed(tcod.KEY_UP):
         player.move(0, -1)
+        fovRecompute = True
     elif tcod.console_is_key_pressed(tcod.KEY_DOWN):
         player.move(0, 1)
+        fovRecompute = True
     elif tcod.console_is_key_pressed(tcod.KEY_LEFT):
         player.move(-1, 0)
+        fovRecompute = True
     elif tcod.console_is_key_pressed(tcod.KEY_RIGHT):
         player.move(1, 0)
-
+        fovRecompute = True
 
 def makeMap():
     global map, player
@@ -106,6 +112,7 @@ def makeMap():
     map = [[ Tile(True)
              for y in range(MAP_HEIGHT) ]
                 for x in range(MAP_WIDTH) ]
+    #creating random rooms
     for i in range(MAX_ROOMS):
         w = tcod.random_get_int(0, ROOM_MIN_SIZE, ROOM_MAX_SIZE)
         h = tcod.random_get_int(0, ROOM_MIN_SIZE, ROOM_MAX_SIZE)
@@ -136,15 +143,26 @@ def makeMap():
 
 
 def renderAll():
-    for object in objects:
-        object.draw()
+    global fovRecompute, fovMap
+    if fovRecompute:
+        fovRecompute = False
+        tcod.map_compute_fov(fovMap, player.x, player.y, TORCH_RADIUS, FOV_LIGHT_WALLS, FOV_ALGO)
     for y in range(MAP_HEIGHT):
         for x in range(MAP_WIDTH):
+            visable = tcod.map_is_in_fov(fovMap, x, y)
             wall = map[x][y].blockSight
-            if wall:
-                tcod.console_set_char_background(con, x, y, colorDarkWall, tcod.BKGND_SET)
+            if not visable:
+                if map[x][y].explored:
+                    if wall:
+                        tcod.console_set_char_background(con, x, y, colorDarkWall, tcod.BKGND_SET)
+                    else:
+                        tcod.console_set_char_background(con, x, y, colorDarkGround, tcod.BKGND_SET)
             else:
-                tcod.console_set_char_background(con, x, y, colorDarGround, tcod.BKGND_SET)
+                if wall:
+                    tcod.console_set_char_background(con, x, y, colorLightWall, tcod.BKGND_SET)
+                else:
+                    tcod.console_set_char_background(con, x, y, colorLightGround, tcod.BKGND_SET)
+                    map[x][y].explored = True
     for object in objects:
         object.draw()
 
@@ -155,13 +173,26 @@ tcod.console_set_custom_font('arial10x10.png', tcod.FONT_TYPE_GREYSCALE | tcod.F
 tcod.console_init_root(SCREEN_WIDTH, SCREEN_HEIGHT, 'python/RogueGame', False)
 con = tcod.console_new(SCREEN_WIDTH, SCREEN_HEIGHT)
 tcod.sys_set_fps(LIMITFPS)
+#characters
 player = Object(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, '@', tcod.turquoise)
 npc = Object(SCREEN_WIDTH/2 - 5, SCREEN_HEIGHT/2 - 5, '*', tcod.red)
 objects = [player, npc]
+
+#map colors
+colorLightWall = tcod.Color(130,110,50)
+colorLightGround = tcod.Color(200,1080,50)
 colorDarkWall = tcod.Color(0, 0, 100)
-colorDarGround = tcod.Color(50, 50, 150)
+colorDarkGround = tcod.Color(50, 50, 150)
 
 makeMap()
+
+fovMap = tcod.map_new(MAP_WIDTH, MAP_HEIGHT)
+for y in range(MAP_HEIGHT):
+    for x in range(MAP_WIDTH):
+        tcod.map_set_properties(fovMap, x, y, not map[x][y].blockSight, not map[x][y].blocked)
+
+fovRecompute = True
+
 while not tcod.console_is_window_closed():
     renderAll()
 
