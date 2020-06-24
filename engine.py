@@ -1,4 +1,4 @@
-import tcod
+import tcod, math
 
 SCREEN_WIDTH = 80
 SCREEN_HEIGHT = 50
@@ -15,25 +15,87 @@ MAX_ROOM_ENEMIES = 3
 
 class Object:
 
-    def __init__(self, x, y, char, name, color, blocks=False):
+    def __init__(self, x, y, char, name, color, blocks=False, fighter=None, ai=None):
         self.x = x
         self.y = y
         self.char = char
         self.name = name
         self.color = color
         self.blocks = blocks
+        self.fighter = fighter
+        if self.fighter:
+            self.fighter.owner = self
+        self.ai = ai
+        if self.ai:
+            self.ai.owner = self
+
 
     def move(self, dx, dy):
         if not isBlocked(self.x + dx, self.y + dy):
             self.x += dx
             self.y += dy
 
+    def moveTowards(self, targetX, targetY):
+        dx = targetX - self.x
+        dy = targetY - self.y
+        distance = math.sqrt(dx ** 2 + dy ** 2)
+        dx = int(round(dx / distance))
+        dy = int(round(dy / distance))
+        self.move(dx, dy)
+
+    def distanceTo(self, other):
+        dx = other.x - self.x
+        dy = other.y - self.y
+        return math.sqrt(dx ** 2 + dy ** 2)
+
+    def sendToBack(self):
+        global objects
+        objects.remove(self)
+        objects.insert(0, self)
+
     def draw(self):
-        tcod.console_set_default_foreground(con, self.color)
-        tcod.console_put_char(con, self.x, self.y, self.char, tcod.BKGND_NONE)
+        if tcod.map_is_in_fov(fovMap, self.x, self.y):
+            tcod.console_set_default_foreground(con, self.color)
+            tcod.console_put_char(con, self.x, self.y, self.char, tcod.BKGND_NONE)
 
     def clear(self):
         tcod.console_put_char(con, self.x, self.y, ' ', tcod.BKGND_NONE)
+
+
+class Fighter:
+    def __init__(self, hp, defense, power, deathFunction=None):
+        self.maxHp = hp
+        self.hp = hp
+        self.defense = defense
+        self.power = power
+        self.deathFunction = deathFunction
+
+    def takeDamage(self, damage):
+        if damage > 0:
+            self.hp -= damage
+        if self.hp <= 0:
+            function = self.deathFunction
+            if function is not None:
+                function(self.owner)
+
+    def attack(self, target):
+        damage = self.power - target.fighter.defense
+        if damage > 0:
+            print self.owner.name.capitalize() + ' attacks ' + target.name + ' for ' + str(damage) + ' hit points.'
+            target.fighter.takeDamage(damage)
+        else:
+            self.owner.name.capitalize() + ' attacks ' + target.name + ' but it has no effect!'
+
+
+class BasicEnemy:
+    def takeTurn(self):
+        #print 'The ' + self.owner.name + ' growls!'
+        enemy = self.owner
+        if tcod.map_is_in_fov(fovMap, enemy.x, enemy.y):
+            if enemy.distanceTo(player) >= 2:
+                enemy.moveTowards(player.x, player.y)
+            elif player.fighter.hp > 0:
+                enemy.fighter.attack(player)
 
 
 class Tile:
@@ -59,6 +121,7 @@ class Rect:
 
     def intersect(self, other):
         return self.x1 <= other.x2 and self.x2 >= other.x1 and self.y1 <= other.y1 and self.y2 >= other.y2
+
 
 def isBlocked(x, y):
     if map[x][y].blocked:
@@ -95,11 +158,11 @@ def playerMoveOrAttack(dx, dy):
 
     target = None
     for object in objects:
-        if object.x == x and object.y == y:
+        if  object.fighter and object.x == x and object.y == y:
             target = object
             break
     if target is not None:
-        print 'The ' + target.name + 'laughs at your petty effort to attack him'
+        player.fighter.attack(target)
     else:
          player.move(dx, dy)
          fovRecompute = True
@@ -189,13 +252,18 @@ def renderAll():
                     tcod.console_set_char_background(con, x, y, colorLightGround, tcod.BKGND_SET)
                     map[x][y].explored = True
     for object in objects:
-        object.draw()
+        if object != player:
+            object.draw()
+    player.draw()
 
     tcod.console_blit(con, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0)
+    tcod.console_set_default_foreground(con, tcod.white)
+    tcod.console_print_ex(con, 1, SCREEN_HEIGHT - 2, tcod.BKGND_NONE, tcod.LEFT, 'HP: ' + str(player.fighter.hp) + '/' + str(player.fighter.maxHp))
 
 
 def place_objects(room):
     numEnemies = tcod.random_get_int(0, 0, MAX_ROOM_ENEMIES)
+
     for i in range(numEnemies):
         x = tcod.random_get_int(0, room.x1, room.x2)
         y = tcod.random_get_int(0, room.y1, room.y2)
@@ -203,18 +271,44 @@ def place_objects(room):
         if not isBlocked(x, y):
             if tcod.random_get_int(0, 0, 100,) < 80:
                 #ORC
-                enemy = Object(x, y, 'O', 'Orc', tcod.desaturated_green, blocks=True)
+                orcFighterComponent = Fighter(hp=5, defense=3, power=5, deathFunction=enemyDeath)
+                aiComponent = BasicEnemy()
+                enemy = Object(x, y, 'O', 'Orc', tcod.desaturated_green, blocks=True, fighter=orcFighterComponent, ai=aiComponent)
             else:
                 #TROLL
-                enemy = Object(x, y, 'T', 'Troll', tcod.darker_green, blocks=True)
+                trollFighterComponent = Fighter(hp=8, defense=5, power=4, deathFunction=enemyDeath)
+                aiComponent = BasicEnemy()
+                enemy = Object(x, y, 'T', 'Troll', tcod.darker_green, blocks=True, fighter=trollFighterComponent, ai=aiComponent)
             objects.append(enemy)
+
+def playerDeath(player):
+    global gameState
+    print 'YOU DIED!'
+    gameState = 'dead'
+    player.char = '%'
+    player.color = tcod.darkest_red
+
+def enemyDeath(enemy):
+    print enemy.name.capitalize() + ' is dead!'
+    enemy.char = '%'
+    enemy.color = tcod.darker_red
+    enemy.blocks = False
+    enemy.fighter = None
+    enemy.ai = None
+    enemy.name = 'remains of ' + enemy.name
+    enemy.sendToBack()
+
 
 tcod.console_set_custom_font('arial10x10.png', tcod.FONT_TYPE_GREYSCALE | tcod.FONT_LAYOUT_TCOD)
 tcod.console_init_root(SCREEN_WIDTH, SCREEN_HEIGHT, 'python/RogueGame', False)
 con = tcod.console_new(SCREEN_WIDTH, SCREEN_HEIGHT)
 tcod.sys_set_fps(LIMITFPS)
+
+#basic classes
+playerFighterComponent = Fighter(hp=123, defense=3, power=8, deathFunction=playerDeath)
+
 #characters
-player = Object(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, '@', 'player', tcod.turquoise, blocks=True)
+player = Object(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, '@', 'player', tcod.turquoise, blocks=True, fighter=playerFighterComponent)
 objects = [player]
 
 #map colors
@@ -248,5 +342,5 @@ while not tcod.console_is_window_closed():
         break
     if gameState == 'playing' and playerAction != 'didnt-take-turn':
         for object in objects:
-            if object != 'player':
-                print 'The ' + object.name + ' growls!'
+            if object.ai:
+                object.ai.takeTurn()
